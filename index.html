@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Pixel Art 8x8</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #181818;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 15px;
+        }
+        h2 { margin-bottom: 10px; }
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(8, 35px);
+            grid-template-rows: repeat(8, 35px);
+            gap: 2px;
+            background: #333;
+            padding: 4px;
+            border-radius: 8px;
+            touch-action: none;
+        }
+        .cell {
+            width: 35px;
+            height: 35px;
+            background: #000;
+            border-radius: 4px;
+            cursor: pointer;
+            box-sizing: border-box;
+            border: 1px solid #222;
+        }
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        input[type="color"] {
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            background: none;
+        }
+        button {
+            background: #2ea6ff;
+            border: none;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button.danger { background: #ff4b4b; }
+        .target-selector {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Pixel Art 8x8</h2>
+
+    <div id="grid"></div>
+
+    <div class="controls">
+        <label>Цвет: <input type="color" id="colorPicker" value="#ff0000"></label>
+        <button class="danger" onclick="clearGrid()">Очистить</button>
+    </div>
+
+    <div class="target-selector">
+        <button onclick="sendData('my')">Мне</button>
+        <button onclick="sendData('parents')">Родителям</button>
+        <button onclick="sendData('all')">Всем</button>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        const grid = document.getElementById('grid');
+        const colorPicker = document.getElementById('colorPicker');
+        let pixels = new Array(64).fill("000000");
+        let isDrawing = false;
+
+        // Генерация сетки 8x8
+        for (let i = 0; i < 64; i++) {
+            const cell = document.createElement('div');
+            cell.classList.add('cell');
+            cell.dataset.index = i;
+
+            const paint = () => {
+                const color = colorPicker.value;
+                cell.style.backgroundColor = color;
+                pixels[i] = color.replace('#', '').toUpperCase();
+            };
+
+            cell.addEventListener('mousedown', () => { isDrawing = true; paint(); });
+            cell.addEventListener('mouseenter', () => { if (isDrawing) paint(); });
+            cell.addEventListener('touchstart', (e) => { isDrawing = true; paint(); e.preventDefault(); });
+            
+            grid.appendChild(cell);
+        }
+
+        window.addEventListener('mouseup', () => isDrawing = false);
+        window.addEventListener('touchend', () => isDrawing = false);
+
+        function clearGrid() {
+            pixels.fill("000000");
+            document.querySelectorAll('.cell').forEach(c => c.style.backgroundColor = '#000');
+        }
+
+        function sendData(target) {
+            const payload = {
+                target: target,
+                pixels: pixels
+            };
+            // Отправка данных обратно боту
+            tg.sendData(JSON.stringify(payload));
+        }
+    </script>
+</body>
+</html>
