@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Pixel Art 8x8</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -17,7 +18,15 @@
             margin: 0;
             padding: 15px;
         }
-        h2 { margin-bottom: 10px; }
+        h2 { margin-bottom: 6px; }
+        #status {
+            font-size: 13px;
+            margin-bottom: 10px;
+            min-height: 18px;
+            color: #aaa;
+        }
+        #status.ok { color: #4cd964; }
+        #status.err { color: #ff6b6b; }
         #grid {
             display: grid;
             grid-template-columns: repeat(8, 35px);
@@ -27,6 +36,8 @@
             padding: 4px;
             border-radius: 8px;
             touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
         }
         .cell {
             width: 35px;
@@ -60,6 +71,7 @@
             font-weight: bold;
             cursor: pointer;
         }
+        button:disabled { background: #555; cursor: not-allowed; }
         button.danger { background: #ff4b4b; }
         .target-selector {
             margin-top: 15px;
@@ -71,6 +83,7 @@
 <body>
 
     <h2>Pixel Art 8x8</h2>
+    <div id="status">Подключение к брокеру…</div>
 
     <div id="grid"></div>
 
@@ -80,54 +93,167 @@
     </div>
 
     <div class="target-selector">
-        <button onclick="sendData('my')">Мне</button>
-        <button onclick="sendData('parents')">Родителям</button>
-        <button onclick="sendData('all')">Всем</button>
+        <button class="send-btn" onclick="sendData('my')" disabled>Мне</button>
+        <button class="send-btn" onclick="sendData('parents')" disabled>Родителям</button>
+        <button class="send-btn" onclick="sendData('all')" disabled>Всем</button>
     </div>
 
     <script>
+        // ---------- Настройки ----------
+        // Брокер: WebSocket поверх TLS (страница на https, поэтому нужен wss)
+        const BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+
+        // Топики матриц. Желательно заменить на длинные уникальные имена
+        // (и такие же прописать в WLED), т.к. брокер публичный.
+        const TOPICS = {
+            my: "artmatrix_il/my/api",
+            parents: "artmatrix_il/parents/api",
+            all: "artmatrix_il/all/api"
+        };
+
+        const BRIGHTNESS = 128;
+
+        // ---------- Telegram ----------
         const tg = window.Telegram.WebApp;
+        tg.ready();
         tg.expand();
 
+        // ---------- Статус ----------
+        const statusEl = document.getElementById('status');
+        const sendButtons = document.querySelectorAll('.send-btn');
+        let statusTimer = null;
+
+        function setStatus(text, cls) {
+            statusEl.textContent = text;
+            statusEl.className = cls || '';
+        }
+
+        function setConnected(connected) {
+            sendButtons.forEach(b => b.disabled = !connected);
+            if (connected) setStatus('Подключено к брокеру', 'ok');
+        }
+
+        function flashStatus(text, cls) {
+            setStatus(text, cls);
+            clearTimeout(statusTimer);
+            statusTimer = setTimeout(() => {
+                if (client.connected) setStatus('Подключено к брокеру', 'ok');
+            }, 2500);
+        }
+
+        // ---------- MQTT ----------
+        const client = mqtt.connect(BROKER_URL, {
+            clientId: 'artmatrix_ui_' + Math.random().toString(16).slice(2, 10),
+            keepalive: 30,
+            reconnectPeriod: 2000,
+            connectTimeout: 10000,
+            clean: true
+        });
+
+        client.on('connect', () => setConnected(true));
+        client.on('reconnect', () => {
+            setConnected(false);
+            setStatus('Переподключение…');
+        });
+        client.on('offline', () => {
+            setConnected(false);
+            setStatus('Нет соединения с брокером', 'err');
+        });
+        client.on('error', (err) => {
+            setConnected(false);
+            setStatus('Ошибка MQTT: ' + (err && err.message ? err.message : err), 'err');
+        });
+
+        // ---------- Сетка 8x8 ----------
         const grid = document.getElementById('grid');
         const colorPicker = document.getElementById('colorPicker');
-        let pixels = new Array(64).fill("000000");
+        const pixels = new Array(64).fill("000000");
         let isDrawing = false;
 
-        // Генерация сетки 8x8
         for (let i = 0; i < 64; i++) {
             const cell = document.createElement('div');
             cell.classList.add('cell');
             cell.dataset.index = i;
-
-            const paint = () => {
-                const color = colorPicker.value;
-                cell.style.backgroundColor = color;
-                pixels[i] = color.replace('#', '').toUpperCase();
-            };
-
-            cell.addEventListener('mousedown', () => { isDrawing = true; paint(); });
-            cell.addEventListener('mouseenter', () => { if (isDrawing) paint(); });
-            cell.addEventListener('touchstart', (e) => { isDrawing = true; paint(); e.preventDefault(); });
-            
             grid.appendChild(cell);
         }
 
+        function paint(cell) {
+            const color = colorPicker.value;
+            cell.style.backgroundColor = color;
+            pixels[Number(cell.dataset.index)] = color.replace('#', '').toUpperCase();
+        }
+
+        function cellAt(x, y) {
+            const el = document.elementFromPoint(x, y);
+            return el && el.classList.contains('cell') ? el : null;
+        }
+
+        // Мышь
+        grid.addEventListener('mousedown', (e) => {
+            if (e.target.classList.contains('cell')) {
+                isDrawing = true;
+                paint(e.target);
+            }
+        });
+        grid.addEventListener('mouseover', (e) => {
+            if (isDrawing && e.target.classList.contains('cell')) paint(e.target);
+        });
         window.addEventListener('mouseup', () => isDrawing = false);
+
+        // Касания (рисование проведением пальца)
+        grid.addEventListener('touchstart', (e) => {
+            isDrawing = true;
+            const t = e.touches[0];
+            const cell = cellAt(t.clientX, t.clientY);
+            if (cell) paint(cell);
+            e.preventDefault();
+        }, { passive: false });
+
+        grid.addEventListener('touchmove', (e) => {
+            if (!isDrawing) return;
+            const t = e.touches[0];
+            const cell = cellAt(t.clientX, t.clientY);
+            if (cell) paint(cell);
+            e.preventDefault();
+        }, { passive: false });
+
         window.addEventListener('touchend', () => isDrawing = false);
+        window.addEventListener('touchcancel', () => isDrawing = false);
 
         function clearGrid() {
             pixels.fill("000000");
             document.querySelectorAll('.cell').forEach(c => c.style.backgroundColor = '#000');
         }
 
+        // ---------- Отправка на матрицу ----------
         function sendData(target) {
-            const payload = {
-                target: target,
-                pixels: pixels
-            };
-            // Отправка данных обратно боту
-            tg.sendData(JSON.stringify(payload));
+            if (!client.connected) {
+                flashStatus('Нет соединения с брокером', 'err');
+                return;
+            }
+
+            // Формат WLED: [0, "HEX", 1, "HEX", ...]
+            const wledI = [];
+            for (let idx = 0; idx < pixels.length; idx++) {
+                wledI.push(idx, pixels[idx]);
+            }
+
+            const payload = JSON.stringify({
+                on: true,
+                bri: BRIGHTNESS,
+                seg: [{ i: wledI }]
+            });
+
+            const topic = TOPICS[target] || TOPICS.my;
+
+            client.publish(topic, payload, { qos: 1 }, (err) => {
+                if (err) {
+                    flashStatus('Не удалось отправить: ' + err.message, 'err');
+                } else {
+                    flashStatus('✅ Отправлено: ' + target, 'ok');
+                    if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+                }
+            });
         }
     </script>
 </body>
