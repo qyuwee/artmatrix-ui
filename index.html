@@ -89,13 +89,13 @@
 
     <div class="controls">
         <label>Цвет: <input type="color" id="colorPicker" value="#ff0000"></label>
-        <button class="danger" onclick="clearGrid()">Очистить</button>
+        <button class="danger" id="clearBtn" type="button">Очистить</button>
     </div>
 
     <div class="target-selector">
-        <button class="send-btn" onclick="sendData('my')" disabled>Мне</button>
-        <button class="send-btn" onclick="sendData('parents')" disabled>Родителям</button>
-        <button class="send-btn" onclick="sendData('all')" disabled>Всем</button>
+        <button class="send-btn" data-target="my" type="button" disabled>Мне</button>
+        <button class="send-btn" data-target="parents" type="button" disabled>Родителям</button>
+        <button class="send-btn" data-target="all" type="button" disabled>Всем</button>
     </div>
 
     <script>
@@ -112,6 +112,11 @@
         };
 
         const BRIGHTNESS = 128;
+
+        // true  — «змейка» исправляется здесь, в коде страницы
+        //         (в WLED Serpentine при этом должен быть ВЫКЛЮЧЕН)
+        // false — если «змейка» настроена в WLED (2D Matrix + Serpentine)
+        const FIX_SERPENTINE = true;
 
         // ---------- Telegram ----------
         const tg = window.Telegram.WebApp;
@@ -141,29 +146,6 @@
             }, 2500);
         }
 
-        // ---------- MQTT ----------
-        const client = mqtt.connect(BROKER_URL, {
-            clientId: 'artmatrix_ui_' + Math.random().toString(16).slice(2, 10),
-            keepalive: 30,
-            reconnectPeriod: 2000,
-            connectTimeout: 10000,
-            clean: true
-        });
-
-        client.on('connect', () => setConnected(true));
-        client.on('reconnect', () => {
-            setConnected(false);
-            setStatus('Переподключение…');
-        });
-        client.on('offline', () => {
-            setConnected(false);
-            setStatus('Нет соединения с брокером', 'err');
-        });
-        client.on('error', (err) => {
-            setConnected(false);
-            setStatus('Ошибка MQTT: ' + (err && err.message ? err.message : err), 'err');
-        });
-
         // ---------- Сетка 8x8 ----------
         const grid = document.getElementById('grid');
         const colorPicker = document.getElementById('colorPicker');
@@ -188,6 +170,13 @@
             return el && el.classList.contains('cell') ? el : null;
         }
 
+        function clearGrid() {
+            pixels.fill("000000");
+            document.querySelectorAll('.cell').forEach(c => {
+                c.style.backgroundColor = '#000';
+            });
+        }
+
         // Мышь
         grid.addEventListener('mousedown', (e) => {
             if (e.target.classList.contains('cell')) {
@@ -198,7 +187,7 @@
         grid.addEventListener('mouseover', (e) => {
             if (isDrawing && e.target.classList.contains('cell')) paint(e.target);
         });
-        window.addEventListener('mouseup', () => isDrawing = false);
+        window.addEventListener('mouseup', () => { isDrawing = false; });
 
         // Касания (рисование проведением пальца)
         grid.addEventListener('touchstart', (e) => {
@@ -217,34 +206,62 @@
             e.preventDefault();
         }, { passive: false });
 
-        window.addEventListener('touchend', () => isDrawing = false);
-        window.addEventListener('touchcancel', () => isDrawing = false);
+        window.addEventListener('touchend', () => { isDrawing = false; });
+        window.addEventListener('touchcancel', () => { isDrawing = false; });
 
+        // Кнопка «Очистить»
+        document.getElementById('clearBtn').addEventListener('click', clearGrid);
+
+        // ---------- MQTT ----------
+        const client = mqtt.connect(BROKER_URL, {
+            clientId: 'artmatrix_ui_' + Math.random().toString(16).slice(2, 10),
+            keepalive: 30,
+            reconnectPeriod: 2000,
+            connectTimeout: 10000,
+            clean: true
+        });
+
+        client.on('connect', () => setConnected(true));
+        client.on('reconnect', () => {
+            setConnected(false);
+            setStatus('Переподключение…');
+        });
+        client.on('offline', () => {
+            setConnected(false);
+            setStatus('Нет соединения с брокером', 'err');
+        });
+        client.on('error', (err) => {
+            setConnected(false);
+            setStatus('Ошибка MQTT: ' + (err && err.message ? err.message : err), 'err');
+        });
+
+        // ---------- Отправка на матрицу ----------
         function sendData(target) {
             if (!client.connected) {
                 flashStatus('Нет соединения с брокером', 'err');
                 return;
             }
-        
+
             // Формат WLED: [0, "HEX", 1, "HEX", ...]
             const wledI = [];
             for (let row = 0; row < 8; row++) {
                 for (let col = 0; col < 8; col++) {
                     const src = row * 8 + col;
                     // в строках 1, 3, 5, 7 (индексы 0, 2, 4, 6) порядок светодиодов обратный
-                    const dst = row * 8 + (row % 2 === 0 ? 7 - col : col);
+                    const flip = FIX_SERPENTINE && row % 2 === 0;
+                    const dst = row * 8 + (flip ? 7 - col : col);
                     wledI.push(dst, pixels[src]);
                 }
             }
-        
+
             const payload = JSON.stringify({
                 on: true,
                 bri: BRIGHTNESS,
                 seg: [{ i: wledI }]
             });
-        
+
             const topic = TOPICS[target] || TOPICS.my;
-        
+
             client.publish(topic, payload, { qos: 1 }, (err) => {
                 if (err) {
                     flashStatus('Не удалось отправить: ' + err.message, 'err');
@@ -254,6 +271,10 @@
                 }
             });
         }
+
+        sendButtons.forEach(btn => {
+            btn.addEventListener('click', () => sendData(btn.dataset.target));
+        });
     </script>
 </body>
 </html>
