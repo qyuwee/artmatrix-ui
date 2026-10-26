@@ -242,16 +242,30 @@
                 return;
             }
 
-            // Формат WLED: [0, "HEX", 1, "HEX", ...]
-            const wledI = [];
+            // Раскладываем пиксели по реальным адресам светодиодов
+            // (в строках 1, 3, 5, 7 порядок светодиодов обратный)
+            const leds = new Array(64).fill("000000");
             for (let row = 0; row < 8; row++) {
                 for (let col = 0; col < 8; col++) {
-                    const src = row * 8 + col;
-                    // в строках 1, 3, 5, 7 (индексы 0, 2, 4, 6) порядок светодиодов обратный
                     const flip = FIX_SERPENTINE && row % 2 === 0;
                     const dst = row * 8 + (flip ? 7 - col : col);
-                    wledI.push(dst, pixels[src]);
+                    leds[dst] = pixels[row * 8 + col];
                 }
+            }
+
+            // Компактный формат WLED: сначала заливка всего чёрным,
+            // затем только цветные участки: [старт, стоп (не включая), "HEX"]
+            // или [индекс, "HEX"] для одиночного светодиода
+            const wledI = [0, 64, "000000"];
+            let start = 0;
+            while (start < 64) {
+                let end = start + 1;
+                while (end < 64 && leds[end] === leds[start]) end++;
+                if (leds[start] !== "000000") {
+                    if (end - start === 1) wledI.push(start, leds[start]);
+                    else wledI.push(start, end, leds[start]);
+                }
+                start = end;
             }
 
             const payload = JSON.stringify({
