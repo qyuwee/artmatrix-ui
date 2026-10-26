@@ -220,32 +220,31 @@
         window.addEventListener('touchend', () => isDrawing = false);
         window.addEventListener('touchcancel', () => isDrawing = false);
 
-        function clearGrid() {
-            pixels.fill("000000");
-            document.querySelectorAll('.cell').forEach(c => c.style.backgroundColor = '#000');
-        }
-
-        // ---------- Отправка на матрицу ----------
         function sendData(target) {
             if (!client.connected) {
                 flashStatus('Нет соединения с брокером', 'err');
                 return;
             }
-
+        
             // Формат WLED: [0, "HEX", 1, "HEX", ...]
             const wledI = [];
-            for (let idx = 0; idx < pixels.length; idx++) {
-                wledI.push(idx, pixels[idx]);
+            for (let row = 0; row < 8; row++) {
+                for (let col = 0; col < 8; col++) {
+                    const src = row * 8 + col;
+                    // в строках 1, 3, 5, 7 (индексы 0, 2, 4, 6) порядок светодиодов обратный
+                    const dst = row * 8 + (row % 2 === 0 ? 7 - col : col);
+                    wledI.push(dst, pixels[src]);
+                }
             }
-
+        
             const payload = JSON.stringify({
                 on: true,
                 bri: BRIGHTNESS,
                 seg: [{ i: wledI }]
             });
-
+        
             const topic = TOPICS[target] || TOPICS.my;
-
+        
             client.publish(topic, payload, { qos: 1 }, (err) => {
                 if (err) {
                     flashStatus('Не удалось отправить: ' + err.message, 'err');
